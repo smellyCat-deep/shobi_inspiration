@@ -1,449 +1,853 @@
 // DEBUG: Script started.
-console.log("DEBUG: script.js loaded and running.");
+console.log("DEBUG: script.js (Tailwind v12 - CORRECT Dynamic Filter Logic) loaded.");
 
 let allPerfumes = [];
-const state = { searchQuery: '', sortKey: 'inspiredBy', activeFilters: {}, favorites: [], showingFavorites: false, viewMode: 'grid', currentView: 'main', currentBrand: null };
-let topAccordsChart = null;
-let scentProfileChart = null;
-let perfumeDetailsModal;
-
-function displayPerfumes(perfumes, containerId, customTitle = null) {
-    const listElement = document.getElementById(containerId);
-    listElement.className = state.viewMode === 'grid' ? 'row g-4' : 'list-group';
-    
-    const resultsCountEl = document.getElementById('results-count');
-    if (customTitle) {
-        resultsCountEl.innerHTML = customTitle;
-    } else if (containerId === 'perfume-list') {
-        const perfumeSource = state.currentView === 'brand' ? allPerfumes.filter(p => p.brand === state.currentBrand) : allPerfumes;
-        resultsCountEl.textContent = `Showing ${perfumes.length} of ${perfumeSource.length} results`;
+let allBrands = new Map();
+const state = {
+    searchQuery: '',
+    favorites: [],
+    showingFavorites: false,
+    selectedBrand: null,
+    activeFilters: {
+        gender: [],
+        brands: [],
+        season: [],
+        occasion: [],
+        accords: []
     }
+};
 
-    if(perfumes.length === 0) {
-        listElement.innerHTML = '<div class="col-12"><div class="alert alert-info">No perfumes matched your criteria.</div></div>';
+// KONSTANTER til Boost Guide
+const LIGHT_ACCORDS = ['fresh', 'aquatic', 'citrus', 'aromatic', 'floral'];
+const HEAVY_ACCORDS = ['gourmand', 'oriental', 'amber', 'spicy', 'leather', 'woody'];
+
+// Mapping for token farver
+const TOKEN_COLORS = {
+    gender: 'token-gender',
+    brands: 'token-brand',
+    season: 'token-season',
+    occasion: 'token-occasion',
+    accords: 'token-accord'
+};
+
+// --- KERNELOGIK: DATAVISNING ---
+
+function displayPerfumes(perfumes) {
+    const container = document.getElementById('resultsContainer');
+    const template = document.getElementById('perfume-card-template');
+    const resultsCountEl = document.getElementById('results-count');
+
+    container.innerHTML = ''; // Nulstil container
+
+    // Opdater tæller
+    let countText = `Showing ${perfumes.length}`;
+    if (state.selectedBrand) {
+        countText += ` result(s) for "${state.selectedBrand}"`;
+    } else if (state.showingFavorites) {
+        countText += ` favorite(s)`;
+    } else {
+        countText += ` of ${allPerfumes.length} results`;
+    }
+    resultsCountEl.textContent = countText + ".";
+
+    if (perfumes.length === 0) {
+        container.innerHTML = `<p class="text-secondary col-span-full">No perfumes matched your selection.</p>`;
         return;
     }
 
-    const perfumesHTML = perfumes.map(perfume => {
+    // Klon skabelon for hver parfume
+    perfumes.forEach(perfume => {
         const p = perfume.item ? perfume.item : perfume;
+        const card = template.content.cloneNode(true);
         const isFavorite = state.favorites.includes(p.code);
-        const accordsText = (p.mainAccords || []).slice(0, 3).map(a => `<span class="badge bg-secondary me-1 accord-tag" onclick="handleAccordClick('${a}')">${a}</span>`).join('');
-        
-        // *** RETTELSE 1: Linket til Shobi er nu det korrekte søge-link ***
+
+        // Udfyld data
+        card.querySelector('[data-field="code"]').textContent = p.code;
+        card.querySelector('[data-field="inspiredBy"]').textContent = p.inspiredBy;
+        card.querySelector('[data-field="brand"]').textContent = p.brand;
+        card.querySelector('[data-field="description"]').textContent = p.description || '';
+
         const shobiLink = `https://leparfum.com.gr/en/module/iqitsearch/searchiqit?s=${p.code}`;
-        
-        const parfumoLinkHTML = p.link ? `<a href="${p.link}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-info ms-1">Parfumo</a>` : '';
+        card.querySelector('[data-field="shobiLink"]').href = shobiLink;
 
-        let genderIcon = '';
-        if (p.genderAffinity === 'Feminine') genderIcon = '<i class="fas fa-venus text-danger ms-2"></i>';
-        else if (p.genderAffinity === 'Masculine') genderIcon = '<i class="fas fa-mars text-primary ms-2"></i>';
-        else if (p.genderAffinity === 'Unisex') genderIcon = '<i class="fas fa-venus-mars text-warning ms-2"></i>';
-        
-        if (state.viewMode === 'grid') {
-            return `
-            <div class="col-md-6 col-xl-4">
-                <div class="card h-100 shadow-sm perfume-card bg-body-tertiary">
-                    <div class="card-body d-flex flex-column position-relative">
-                        <i class="fas fa-heart favorite-btn ${isFavorite ? 'is-favorite' : ''}" data-code="${p.code}"></i>
-                        <h5 class="card-title">${p.inspiredBy}${genderIcon}</h5>
-                        <h6 class="card-subtitle mb-2 text-muted"><span class="brand-link" data-brand="${p.brand}">${p.brand}</span></h6>
-                        <p class="card-text small flex-grow-1">${String(p.description || 'No description available.').substring(0, 80)}...</p>
-                        <div class="mb-2">${accordsText}</div>
-                        <div class="mt-auto">
-                            <button class="btn btn-sm btn-outline-secondary" onclick="showPerfumeDetails('${p.code}')">Details</button>
-                            <a href="${shobiLink}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary ms-1">Shobi</a>
-                            ${parfumoLinkHTML}
-                        </div>
-                    </div>
-                </div>
-            </div>`;
-        } else {
-            return `
-            <li class="list-group-item bg-body-tertiary">
-                <div class="d-flex w-100 justify-content-between align-items-start">
-                    <div>
-                        <h5 class="mb-1">${p.inspiredBy}${genderIcon} <small class="text-muted">by <span class="brand-link" data-brand="${p.brand}">${p.brand}</span></small></h5>
-                        <p class="mb-1 small">${String(p.description || 'No description available.').substring(0, 120)}...</p>
-                        <div class="mt-2">${accordsText}</div>
-                    </div>
-                    <div class="d-flex flex-column align-items-end ms-3 text-nowrap" style="min-width: 120px;">
-                        <i class="fas fa-heart favorite-btn mb-auto ${isFavorite ? 'is-favorite' : ''}" data-code="${p.code}"></i>
-                        <div class="mt-2">
-                            <button class="btn btn-sm btn-outline-secondary" onclick="showPerfumeDetails('${p.code}')">Details</button>
-                            <a href="${shobiLink}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary ms-1">Shobi</a>
-                            ${parfumoLinkHTML}
-                        </div>
-                    </div>
-                </div>
-            </li>`;
-        }
-    }).join('');
+        // Håndter favoritknap
+        const favButton = card.querySelector('.favorite-btn');
+        favButton.dataset.code = p.code;
+        favButton.innerHTML = isFavorite ? '<i class="fa-solid fa-heart"></i>' : '<i class="fa-regular fa-heart"></i>';
+        if (isFavorite) favButton.classList.add('is-favorite');
 
-    listElement.innerHTML = perfumesHTML;
-    
-    listElement.querySelectorAll('.favorite-btn').forEach(btn => btn.addEventListener('click', toggleFavorite));
-    listElement.querySelectorAll('.brand-link').forEach(link => link.addEventListener('click', e => showBrandView(e.target.dataset.brand)));
+        // Ikoner
+        const audienceIconsContainer = card.querySelector('[data-field="audience-icons"]');
+        audienceIconsContainer.innerHTML = getAudienceIcons(p.genderAffinity);
+        const typeIconsContainer = card.querySelector('[data-field="type-icons"]');
+        typeIconsContainer.innerHTML = getTypeIcons(p.mainAccords);
+
+        // Sæt data-attributter til klik-handlere
+        card.querySelector('[data-action="show-details"]').dataset.code = p.code;
+        card.querySelector('[data-action="filter-brand"]').dataset.brand = p.brand;
+
+        container.appendChild(card);
+    });
+
+    // Gen-tilføj event listeners
+    container.querySelectorAll('.favorite-btn').forEach(btn =>
+        btn.addEventListener('click', toggleFavorite)
+    );
+    container.querySelectorAll('[data-action="show-details"]').forEach(el =>
+        el.addEventListener('click', (e) => showPerfumeModal(e.currentTarget.dataset.code))
+    );
+    container.querySelectorAll('[data-action="filter-brand"]').forEach(btn =>
+        btn.addEventListener('click', (e) => handleBrandFilterClick(e.currentTarget.dataset.brand))
+    );
+    container.querySelectorAll('[data-action="filter-icon"]').forEach(btn =>
+        btn.addEventListener('click', (e) => {
+            const el = e.currentTarget;
+            handleIconFilterClick(el.dataset.filterType, el.dataset.filterValue);
+        })
+    );
 }
 
+/**
+ * Anvender HELE filterkæden OG opdaterer UI bagefter.
+ */
 function applyFiltersAndRender() {
-    let perfumeSource = allPerfumes;
-    // Determine the source of perfumes based on the current view
-    if (state.currentView === 'brand' && state.currentBrand) {
-        perfumeSource = allPerfumes.filter(p => p.brand === state.currentBrand);
-    } else if (state.showingFavorites) {
-        perfumeSource = allPerfumes.filter(p => state.favorites.includes(p.code));
+    // Kør selve filtreringen
+    const filteredPerfumes = getFilteredPerfumes();
+
+    // --- UI Opdateringer ---
+    displayBrandInfo(); // Vis/skjul brand info boks
+    displayPerfumes(filteredPerfumes); // Vis de filtrerede resultater
+    updateAvailableFilterOptions(); // NYT: Kør den nye, korrekte logik for at deaktivere/aktivere
+    displayActiveFilterTokens(); // Vis filter tokens
+}
+
+/**
+ * NYT: Funktion der KUN udfører filtreringen baseret på state.
+ * Returnerer den filtrerede liste.
+ * @param {Object} [overrideFilters=null] - Et midlertidigt filter-sæt til simulering.
+ */
+function getFilteredPerfumes(overrideFilters = null) {
+    let filtered = [...allPerfumes];
+    const currentFilters = overrideFilters || state.activeFilters; // Brug override hvis det gives
+
+    // --- Filterkæde ---
+    // 1. Brand (enkelt klik ELLER tjekbokse) eller Favoritter
+     // Prioriter selectedBrand hvis det er sat
+     if (state.selectedBrand && !overrideFilters) { // Kun hvis vi ikke simulerer
+         filtered = filtered.filter(p => p.brand === state.selectedBrand);
+     } else if (currentFilters.brands.length > 0) {
+         filtered = filtered.filter(p => currentFilters.brands.includes(p.brand));
+     } else if (state.showingFavorites && !overrideFilters) { // Kun hvis vi ikke simulerer
+         filtered = filtered.filter(p => state.favorites.includes(p.code));
+     }
+
+
+    // 2. Gender (OR logic)
+    if (currentFilters.gender.length > 0) {
+        filtered = filtered.filter(p => {
+            return currentFilters.gender.some(filterGender => p.genderAffinity.includes(filterGender));
+        });
     }
 
-    let filtered = [...perfumeSource];
-    
-    if (state.searchQuery) {
+    // 3. Season (OR logic)
+    if (currentFilters.season.length > 0) {
+        filtered = filtered.filter(p => {
+            return currentFilters.season.some(filterSeason => p.seasons.includes(filterSeason));
+        });
+    }
+
+    // 4. Occasion (OR logic)
+    if (currentFilters.occasion.length > 0) {
+        filtered = filtered.filter(p => {
+            return currentFilters.occasion.some(filterOccasion => p.occasions.includes(filterOccasion));
+        });
+    }
+
+    // 5. Accords (AND logic)
+    if (currentFilters.accords.length > 0) {
+        filtered = filtered.filter(p => {
+            return currentFilters.accords.every(filterAccord => p.mainAccords.includes(filterAccord));
+        });
+    }
+
+    // 6. Søgning (kun hvis vi ikke simulerer)
+    if (state.searchQuery && !overrideFilters) {
         const query = state.searchQuery.toLowerCase();
-        // *** RETTELSE 2: Søgningen tjekker nu også for parfumens 'code' (ID) ***
-        filtered = filtered.filter(p => 
-            String(p.inspiredBy || '').toLowerCase().includes(query) || 
+        filtered = filtered.filter(p =>
+            String(p.inspiredBy || '').toLowerCase().includes(query) ||
             String(p.brand || '').toLowerCase().includes(query) ||
             String(p.code || '').toLowerCase().includes(query)
         );
     }
 
-    for (const key in state.activeFilters) {
-        const selected = state.activeFilters[key];
-        if (selected.length > 0) {
-            filtered = filtered.filter(p => {
-                if (Array.isArray(p[key])) return selected.some(val => p[key].includes(val));
-                return selected.includes(p[key]);
-            });
-        }
-    }
-
-    filtered.sort((a, b) => String(a[state.sortKey] || '').localeCompare(String(b[state.sortKey] || '')));
-    
-    const containerId = state.currentView === 'brand' ? 'brand-perfume-list' : 'perfume-list';
-    displayPerfumes(filtered, containerId);
+    return filtered;
 }
 
-function createFilters(perfumeSource) {
-    const accordion = document.getElementById('filter-accordion');
-    const filters = {
-        mainAccords: { title: 'Main Accords', options: new Set(), limit: 10 },
-        seasons: { title: 'Season', options: new Set() },
-        occasions: { title: 'Occasion', options: new Set() },
-        genderAffinity: { title: 'Gender', options: new Set() }
+
+// --- NY LOGIK: DYNAMISKE FILTRE & TOKENS ---
+
+/**
+ * (OMSKREVET) Opdaterer filter-checkboxes (aktiver/deaktiver) KORREKT.
+ */
+function updateAvailableFilterOptions() {
+    // Gennemgå alle checkboxes
+    document.querySelectorAll('#filter-sidebar input[type="checkbox"]').forEach(checkbox => {
+        let filterType;
+        switch(checkbox.name) {
+            case 'gender': filterType = 'gender'; break;
+            case 'brand': filterType = 'brands'; break; // Matcher state key
+            case 'season': filterType = 'season'; break;
+            case 'occasion': filterType = 'occasion'; break;
+            case 'accord': filterType = 'accords'; break; // Matcher state key
+            default: return;
+        }
+        const value = checkbox.value;
+        const label = checkbox.closest('label');
+
+        // Spring over, hvis checkboxen allerede ER markeret (den skal altid være aktiv)
+        if (checkbox.checked) {
+            checkbox.disabled = false;
+            if (label) label.classList.remove('disabled');
+            return;
+        }
+
+        // SIMULER: Hvad sker der, hvis vi TILFØJER dette filter?
+        // Klon nuværende aktive filtre
+        const simulatedFilters = JSON.parse(JSON.stringify(state.activeFilters));
+        // Tilføj den aktuelle checkbox' værdi midlertidigt
+        simulatedFilters[filterType].push(value);
+
+        // Kør en simulering med de midlertidige filtre
+        const simulationResult = getFilteredPerfumes(simulatedFilters);
+
+        // Opdater checkboxens tilstand baseret på simuleringen
+        if (simulationResult.length > 0) {
+            checkbox.disabled = false;
+            if (label) label.classList.remove('disabled');
+        } else {
+            checkbox.disabled = true;
+            if (label) label.classList.add('disabled');
+        }
+    });
+}
+
+
+/**
+ * Viser de aktive filtre som tokens over resultatlisten. (Uændret)
+ */
+function displayActiveFilterTokens() {
+    const container = document.getElementById('active-filters-display');
+    container.innerHTML = ''; // Nulstil
+    let hasTokens = false;
+
+    // Gennemgå alle aktive filtre i state
+    for (const filterType in state.activeFilters) {
+        state.activeFilters[filterType].forEach(value => {
+            hasTokens = true;
+            const token = document.createElement('span');
+            // Gør første bogstav stort
+            const displayValue = value.charAt(0).toUpperCase() + value.slice(1);
+            token.className = `filter-token ${TOKEN_COLORS[filterType] || 'token-default'}`; // Brug farvemapping
+            token.innerHTML = `
+                ${displayValue}
+                <button data-filter-type="${filterType}" data-filter-value="${value}" title="Remove filter">&times;</button>
+            `;
+            container.appendChild(token);
+        });
+    }
+
+    // Skjul container, hvis der ingen tokens er
+    container.style.display = hasTokens ? 'flex' : 'none';
+
+    // Tilføj event listeners til slette-knapperne
+    container.querySelectorAll('button').forEach(button => {
+        button.addEventListener('click', handleRemoveToken);
+    });
+}
+
+/**
+ * Fjerner et filter, når en token-sletteknap klikkes. (Uændret)
+ */
+function handleRemoveToken(e) {
+    const button = e.currentTarget;
+    const filterType = button.dataset.filterType; // f.eks. 'brands', 'season'
+    const value = button.dataset.filterValue;
+
+    // 1. Fjern fra state
+    const index = state.activeFilters[filterType].indexOf(value);
+    if (index > -1) {
+        state.activeFilters[filterType].splice(index, 1);
+    }
+
+    // 2. Fjern flueben fra checkbox
+    let checkboxName;
+     switch(filterType) {
+         case 'brands': checkboxName = 'brand'; break;
+         case 'accords': checkboxName = 'accord'; break;
+         default: checkboxName = filterType;
+     }
+    const checkbox = document.querySelector(`#filter-sidebar input[name="${checkboxName}"][value="${value}"]`);
+    if (checkbox) {
+        checkbox.checked = false;
+    }
+
+    // 3. Gen-render alt
+    applyFiltersAndRender();
+}
+
+
+// --- ØVRIG KERNELOGIK (Stort set uændret) ---
+
+function displayBrandInfo() {
+    // ... (uændret)
+    const container = document.getElementById('brand-info-container');
+    const contentEl = document.getElementById('brand-info-content');
+
+    if (!state.selectedBrand) {
+        container.classList.add('hidden');
+        return;
+    }
+
+    const brandInfo = allBrands.get(state.selectedBrand);
+    if (!brandInfo) {
+        container.classList.add('hidden');
+        return;
+    }
+
+    contentEl.innerHTML = `
+        <h2 class="text-2xl font-bold text-primary">${brandInfo.name}</h2>
+        <p class="mt-2 text-secondary">${brandInfo.description || 'No information available for this brand.'}</p>
+    `;
+    container.classList.remove('hidden');
+}
+
+function handleBrandFilterClick(brandName) {
+    // ... (uændret)
+    state.selectedBrand = brandName;
+    state.showingFavorites = false;
+
+    // Nulstil brand-tjekbokse i state og UI
+    state.activeFilters.brands = [];
+    document.querySelectorAll('#brand-filters input[type="checkbox"]').forEach(cb => cb.checked = false);
+
+    document.getElementById('favorites-btn').classList.remove('bg-red-800');
+
+    applyFiltersAndRender();
+    document.getElementById('brand-info-container').scrollIntoView({ behavior: 'smooth' });
+}
+
+function handleIconFilterClick(filterType, filterValue) {
+    // ... (uændret)
+    const stateKey = filterType === 'accord' ? 'accords' : filterType;
+
+    const filtersContent = document.getElementById('filters-content');
+    if (filtersContent.classList.contains('hidden') && window.innerWidth < 1024) { // Kun toggle på mobil
+        toggleMobileFilters();
+    }
+
+    const checkboxName = filterType === 'accord' ? 'accord' : filterType;
+    const checkbox = document.querySelector(`#filter-sidebar input[name="${checkboxName}"][value="${filterValue}"]`);
+
+
+    if (checkbox && !checkbox.checked) {
+        checkbox.checked = true; // Sæt fluebenet
+
+        // Udløs 'change' eventet for at bruge den centrale handler
+        checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+}
+
+
+// --- IKON-HJÆLPERE (Uændret) ---
+
+function getAudienceIcons(audience) {
+    // ... (uændret)
+     const a = String(audience || '').toLowerCase();
+    if (!a) return '';
+    let icons = [];
+
+    const iconMap = {
+        'masculine': { value: 'masculine', html: '<i class="fas fa-mars text-blue-600" title="Masculine"></i>' },
+        'feminine': { value: 'feminine', html: '<i class="fas fa-venus text-red-600" title="Feminine"></i>' },
+        'unisex': { value: 'unisex', html: '<i class="fas fa-venus-mars text-green-600" title="Unisex"></i>' }
     };
 
-    const allOccasions = new Set();
-    perfumeSource.forEach(p => {
-        (p.seasons || []).forEach(s => filters.seasons.options.add(s));
-        (p.occasions || []).forEach(o => allOccasions.add(o));
-        if (p.genderAffinity) filters.genderAffinity.options.add(p.genderAffinity);
-    });
-    [...allOccasions].sort().forEach(o => filters.occasions.options.add(o));
+    if (a.includes('male') || a.includes('masculine') || a.includes('men')) icons.push(iconMap.masculine);
+    if (a.includes('female') || a.includes('feminine') || a.includes('women')) icons.push(iconMap.feminine);
+    if (a.includes('unisex')) icons.push(iconMap.unisex);
 
-    const counts = perfumeSource.flatMap(p => p.mainAccords || []).reduce((acc, a) => { acc[a] = (acc[a] || 0) + 1; return acc; }, {});
-    const topAccords = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, filters.mainAccords.limit).map(e => e[0]);
-    topAccords.forEach(a => filters.mainAccords.options.add(a));
-    
-    let html = '';
-    for (const key in filters) {
-        state.activeFilters[key] = [];
-        const options = [...filters[key].options].sort();
-        if (options.length === 0) continue;
-
-        html += `
-        <div class="accordion-item">
-            <h2 class="accordion-header" id="heading-${key}">
-                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-${key}">
-                    ${filters[key].title}
-                </button>
-            </h2>
-            <div id="collapse-${key}" class="accordion-collapse collapse" aria-labelledby="heading-${key}">
-                <div class="accordion-body" style="max-height: 200px; overflow-y: auto;">`;
-        options.forEach(option => {
-            html += `<div class="form-check"><input class="form-check-input filter-checkbox" type="checkbox" value="${option}" id="${key}-${option}" data-filter-key="${key}"><label class="form-check-label" for="${key}-${option}">${option}</label></div>`;
-        });
-        html += `</div></div></div>`;
-    }
-    accordion.innerHTML = html;
-    accordion.querySelectorAll('.filter-checkbox').forEach(box => box.addEventListener('change', handleFilterChange));
+    return icons.map(icon =>
+        `<span data-action="filter-icon" data-filter-type="gender" data-filter-value="${icon.value}">${icon.html}</span>`
+    ).join(' ');
 }
 
-function calculateAndShowStats(perfumeSource) {
-    const chartCanvas = document.getElementById('topAccordsChart');
-    if (!chartCanvas) return;
-    const ctx = chartCanvas.getContext('2d');
-    const counts = perfumeSource.flatMap(p => p.mainAccords || []).reduce((acc, a) => { acc[a] = (acc[a] || 0) + 1; return acc; }, {});
-    const top5 = Object.entries(counts).sort((a,b) => b[1] - a[1]).slice(0, 5);
-    if (topAccordsChart) topAccordsChart.destroy();
-    topAccordsChart = new Chart(ctx, {
-        type: 'doughnut',
-        data: { 
-            labels: top5.map(a => a[0]), 
-            datasets: [{ 
-                label: 'Most Popular Accords', 
-                data: top5.map(a => a[1]),
-                backgroundColor: ['rgba(60, 100, 255, 0.7)', 'rgba(255, 99, 132, 0.7)', 'rgba(255, 205, 86, 0.7)', 'rgba(75, 192, 192, 0.7)', 'rgba(153, 102, 255, 0.7)'],
-            }] 
-        },
-        options: { 
-            responsive: true, 
-            plugins: { legend: { position: 'top' } },
-            onClick: (event, elements) => {
-                if (elements.length > 0) {
-                    const chartElement = elements[0];
-                    const label = topAccordsChart.data.labels[chartElement.index];
-                    handleAccordClick(label);
-                }
-            }
-        }
-    });
-}
+const SCENT_ICON_MAP = {
+    // ... (uændret)
+     'citrus': { icon: '<i class="fas fa-lemon text-yellow-500" title="Citrus"></i>', value: 'citrus' },
+    'woody': { icon: '<i class="fas fa-tree text-amber-700" title="Woody"></i>', value: 'woody' },
+    'floral': { icon: '<i class="fas fa-fan text-pink-400" title="Floral"></i>', value: 'floral' },
+    'aromatic': { icon: '<i class="fas fa-seedling text-lime-600" title="Aromatic"></i>', value: 'aromatic' },
+    'spicy': { icon: '<i class="fas fa-pepper-hot text-orange-600" title="Spicy"></i>', value: 'spicy' },
+    'oriental': { icon: '<i class="fas fa-feather text-purple-500" title="Oriental/Amber"></i>', value: 'oriental' },
+    'amber': { icon: '<i class="fas fa-feather text-purple-500" title="Oriental/Amber"></i>', value: 'amber' },
+    'fresh': { icon: '<i class="fas fa-wind text-sky-500" title="Fresh"></i>', value: 'fresh' },
+    'aquatic': { icon: '<i class="fas fa-water text-cyan-500" title="Aquatic"></i>', value: 'aquatic' },
+    'leather': { icon: '<i class="fas fa-layer-group text-stone-600" title="Leather"></i>', value: 'leather' }
+};
 
-window.navigateToBrand = function(brandName) {
-    perfumeDetailsModal.hide();
-    showBrandView(brandName);
-}
+function getTypeIcons(accords) {
+    // ... (uændret)
+    if (!Array.isArray(accords) || accords.length === 0) return '';
+    let iconsHtml = [];
+    const addedIcons = new Set();
+    const lowerCaseAccords = accords.map(a => a.toLowerCase());
 
-function showPerfumeDetails(code) {
-    const perfume = allPerfumes.find(p => p.code === code);
-    if (!perfume) return;
-    const content = document.getElementById('perfume-details-content');
-    
-    document.getElementById('perfumeDetailsLabel').innerHTML = `${perfume.inspiredBy} by <a href="#" onclick="event.preventDefault(); window.navigateToBrand('${perfume.brand}')" class="brand-link-modal">${perfume.brand}</a>`;
-    
-    const notesHTML = (notes, title) => notes && notes.length > 0 ? `<h6>${title}</h6><p class="text-muted">${notes.join(', ')}</p>` : '';
-    content.innerHTML = `
-        <div class="row">
-            <div class="col-md-7">
-                <p>${perfume.description}</p><hr>
-                <h5>Scent Pyramid</h5>
-                ${notesHTML(perfume.notes.top, 'Top Notes')}
-                ${notesHTML(perfume.notes.heart, 'Heart Notes')}
-                ${notesHTML(perfume.notes.base, 'Base Notes')}
-                <button class="btn btn-info mt-3" onclick="findSimilarPerfumes('${perfume.code}')"><i class="fas fa-search"></i> Find Similar</button>
-            </div>
-            <div class="col-md-5">
-                <h5>Scent Profile</h5>
-                <canvas id="scentProfileChart"></canvas>
-            </div>
-        </div>`;
-    
-    const ctx = document.getElementById('scentProfileChart').getContext('2d');
-    const accordLabels = perfume.mainAccords || [];
-    const accordData = accordLabels.map((_, i) => 10 - i * 1.5);
-
-    if (scentProfileChart) scentProfileChart.destroy();
-    scentProfileChart = new Chart(ctx, {
-        type: 'radar',
-        data: {
-            labels: accordLabels,
-            datasets: [{ label: 'Profile', data: accordData, fill: true, backgroundColor: 'rgba(var(--bs-primary-rgb), 0.2)', borderColor: 'rgb(var(--bs-primary-rgb))', pointBackgroundColor: 'rgb(var(--bs-primary-rgb))' }]
-        },
-        options: { scales: { r: { suggestedMin: 0, suggestedMax: 10, ticks: { display: false } } }, plugins: { legend: { display: false } } }
-    });
-
-    perfumeDetailsModal.show();
-}
-
-function showBrandView(brandName) {
-    state.currentView = 'brand';
-    state.currentBrand = brandName;
-    document.getElementById('main-view').classList.add('d-none');
-    document.getElementById('brand-view').classList.remove('d-none');
-    
-    const brandPerfumes = allPerfumes.filter(p => p.brand === brandName);
-    const brandInfoEntry = allPerfumes.find(p => p.brand === brandName && p.brandDescription);
-    const brandDescription = brandInfoEntry ? brandInfoEntry.brandDescription : 'No brand description available.';
-    document.getElementById('brand-info').innerHTML = `<h2>${brandName}</h2><p>${brandDescription}</p>`;
-    
-    // Rebuild filters and stats for the specific brand
-    createFilters(brandPerfumes);
-    calculateAndShowStats(brandPerfumes);
-    displayPerfumes(brandPerfumes, 'brand-perfume-list');
-}
-
-function findSimilarPerfumes(baseCode) {
-    const basePerfume = allPerfumes.find(p => p.code === baseCode);
-    const baseAccords = new Set(basePerfume.mainAccords);
-    const similar = allPerfumes.filter(p => p.code !== baseCode).map(p => ({ item: p, score: (p.mainAccords || []).filter(accord => baseAccords.has(accord)).length })).sort((a, b) => b.score - a.score).slice(0, 6);
-    perfumeDetailsModal.hide();
-    resetAllFilters();
-    const customTitle = `<h5>Showing perfumes similar to <strong>${basePerfume.inspiredBy}</strong></h5>`;
-    displayPerfumes(similar, 'perfume-list', customTitle);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-}
-
-window.handleAccordClick = (accord) => {
-    if (!accord) return;
-    resetAllFilters();
-    const checkbox = document.querySelector(`#filter-accordion input[value="${accord}"]`);
-    if (checkbox) {
-        checkbox.checked = true;
-        const key = checkbox.dataset.filterKey;
-        if (key) {
-            state.activeFilters[key].push(accord);
+    for (const key in SCENT_ICON_MAP) {
+        if (!addedIcons.has(key) && lowerCaseAccords.some(accord => accord.includes(key))) {
+            const iconData = SCENT_ICON_MAP[key];
+            iconsHtml.push(
+                `<span data-action="filter-icon" data-filter-type="accord" data-filter-value="${iconData.value}">${iconData.icon}</span>`
+            );
+            addedIcons.add(key);
         }
     }
-    applyFiltersAndRender();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return iconsHtml.join(' ');
 }
 
-function handleFilterChange(e) {
-    const key = e.target.dataset.filterKey;
-    const value = e.target.value;
-    if (e.target.checked) state.activeFilters[key].push(value);
-    else state.activeFilters[key] = state.activeFilters[key].filter(v => v !== value);
-    
-    // Only apply filters, don't reset the view
-    state.showingFavorites = false;
-    document.getElementById('favorites-btn').classList.remove('active');
-    applyFiltersAndRender();
-}
+
+// --- KERNELOGIK: FAVORITTER (Uændret) ---
 
 function toggleFavorite(event) {
-    const code = event.target.dataset.code;
+    // ... (uændret)
+     event.stopPropagation();
+    const button = event.currentTarget;
+    const code = button.dataset.code;
     const index = state.favorites.indexOf(code);
-    if (index > -1) state.favorites.splice(index, 1);
-    else state.favorites.push(code);
+
+    if (index > -1) {
+        state.favorites.splice(index, 1);
+        button.innerHTML = '<i class="fa-regular fa-heart"></i>';
+        button.classList.remove('is-favorite');
+    } else {
+        state.favorites.push(code);
+        button.innerHTML = '<i class="fa-solid fa-heart"></i>';
+        button.classList.add('is-favorite');
+    }
+
     localStorage.setItem('shobi-favorites', JSON.stringify(state.favorites));
     document.getElementById('favorites-count').textContent = state.favorites.length;
-    event.target.classList.toggle('is-favorite', index === -1);
+
     if (state.showingFavorites) {
         applyFiltersAndRender();
     }
 }
 
+function loadFavorites() {
+    // ... (uændret)
+    const savedFavorites = localStorage.getItem('shobi-favorites');
+    if (savedFavorites) {
+        state.favorites = JSON.parse(savedFavorites);
+    }
+    document.getElementById('favorites-count').textContent = state.favorites.length;
+}
+
+// --- KERNELOGIK: MODAL (Uændret) ---
+
+const modal = document.getElementById('perfume-modal');
+const modalContent = document.getElementById('modal-content');
+const modalOverlay = document.getElementById('modal-overlay');
+const modalCloseBtn = document.getElementById('modal-close-btn');
+
+function getBoostGuideHtml(perfume) {
+    // ... (uændret)
+    const accords = perfume.mainAccords || [];
+    const isHeavy = accords.some(accord => HEAVY_ACCORDS.includes(accord.toLowerCase()));
+
+    let rec;
+    let title;
+
+    if (isHeavy) {
+        title = "Heavy/Gourmand Scent";
+        rec = { '30ml': '2ml', '50ml': '3-4ml', '100ml': '5ml' };
+    } else {
+        title = "Fresh/Light Scent";
+        rec = { '30ml': '1ml', '50ml': '2ml', '100ml': '3ml' };
+    }
+
+    return `
+        <div class="w-full">
+            <p class="text-sm text-secondary mb-2">Recommendation for a <strong class="text-primary">${title}</strong>:</p>
+            <div class="flex justify-around">
+                <div>
+                    <span class="text-lg font-bold text-primary">30ml</span>
+                    <p class="text-sm text-accent font-medium">+ ${rec['30ml']}</p>
+                </div>
+                <div>
+                    <span class="text-lg font-bold text-primary">50ml</span>
+                    <p class="text-sm text-accent font-medium">+ ${rec['50ml']}</p>
+                </div>
+                <div>
+                    <span class="text-lg font-bold text-primary">100ml</span>
+                    <p class="text-sm text-accent font-medium">+ ${rec['100ml']}</p>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function showPerfumeModal(code) {
+    // ... (uændret)
+    const perfume = allPerfumes.find(p => p.code === code);
+    if (!perfume) return;
+
+    document.getElementById('modal-inspiredBy').textContent = perfume.inspiredBy;
+    document.getElementById('modal-brand').textContent = perfume.brand;
+    document.getElementById('modal-code').textContent = perfume.code;
+    document.getElementById('modal-description').textContent = perfume.description || 'No description available.';
+
+    const notesContainer = document.getElementById('modal-notes');
+    const topNotes = perfume.notes && Array.isArray(perfume.notes.top) && perfume.notes.top.length > 0
+        ? perfume.notes.top.join(', ')
+        : null;
+    const heartNotes = perfume.notes && Array.isArray(perfume.notes.heart) && perfume.notes.heart.length > 0
+        ? perfume.notes.heart.join(', ')
+        : null;
+    const baseNotes = perfume.notes && Array.isArray(perfume.notes.base) && perfume.notes.base.length > 0
+        ? perfume.notes.base.join(', ')
+        : null;
+
+    const notesHtml = `
+        ${topNotes ? `<p><strong class="text-primary">Top:</strong> ${topNotes}</p>` : ''}
+        ${heartNotes ? `<p><strong class="text-primary">Heart:</strong> ${heartNotes}</p>` : ''}
+        ${baseNotes ? `<p><strong class="text-primary">Base:</strong> ${baseNotes}</p>` : ''}
+    `;
+    notesContainer.innerHTML = (topNotes || heartNotes || baseNotes) ? notesHtml : '<p>No note details available.</p>';
+
+    const boostGuideContainer = document.getElementById('modal-boost-guide');
+    boostGuideContainer.innerHTML = getBoostGuideHtml(perfume);
+
+    document.getElementById('modal-shobiLink').href = `https://leparfum.com.gr/en/module/iqitsearch/searchiqit?s=${perfume.code}`;
+
+    modal.classList.remove('invisible');
+    setTimeout(() => {
+        modal.classList.remove('opacity-0');
+        modalContent.classList.remove('opacity-0', '-translate-y-10');
+    }, 10);
+}
+
+function hidePerfumeModal() {
+    // ... (uændret)
+    modal.classList.add('opacity-0');
+    modalContent.classList.add('opacity-0', '-translate-y-10');
+    setTimeout(() => {
+        modal.classList.add('invisible');
+    }, 300);
+}
+
+
+// --- FILTER-LOGIK (OPDATERET) ---
+
+function toggleMobileFilters() {
+    // ... (uændret)
+    const filtersContent = document.getElementById('filters-content');
+    const filtersIcon = document.getElementById('filters-toggle-icon');
+    filtersContent.classList.toggle('hidden');
+    filtersIcon.classList.toggle('rotate-180');
+}
+
+/**
+ * Nulstiller alle filtre og opdaterer UI.
+ */
 function resetAllFilters() {
-    document.querySelectorAll('.filter-checkbox').forEach(box => box.checked = false);
-    for (const key in state.activeFilters) { state.activeFilters[key] = []; }
+    // ... (uændret)
+    state.searchQuery = '';
     state.showingFavorites = false;
-    document.getElementById('favorites-btn').classList.remove('active');
-    state.searchQuery = ''; 
+    state.selectedBrand = null;
+    state.activeFilters = {
+        gender: [],
+        brands: [],
+        season: [],
+        occasion: [],
+        accords: []
+    };
     document.getElementById('search-input').value = '';
+    document.getElementById('favorites-btn').classList.remove('bg-red-800');
+    document.querySelectorAll('#filter-sidebar input[type="checkbox"]').forEach(checkbox => {
+        checkbox.checked = false;
+         // Sikrer at alle labels bliver aktiveret igen
+         checkbox.disabled = false;
+         checkbox.closest('label')?.classList.remove('disabled'); // Sikkerhedscheck for label
+    });
+    applyFiltersAndRender(); // Kald efter UI er nulstillet
+}
+
+
+/**
+ * Bygger filter-checkboxes dynamisk baseret på data.
+ */
+function populateFilters() {
+    const genderContainer = document.getElementById('gender-filters');
+    const brandContainer = document.getElementById('brand-filters');
+    const seasonContainer = document.getElementById('season-filters');
+    const occasionContainer = document.getElementById('occasion-filters');
+    const accordContainer = document.getElementById('accord-filters');
+
+    // Helper til at bygge checkboxes
+    const buildCheckboxes = (container, name, options, loaderId) => {
+        if (!container) return; // Sikkerhedstjek
+        // Konverter options til Array for sort()
+        const sortedOptions = Array.from(options).sort();
+
+        if (sortedOptions.length === 0) {
+             container.innerHTML = `<p class="text-sm text-tertiary">No data found.</p>`;
+        } else {
+             container.innerHTML = sortedOptions.map(option => {
+                 // Check om option er valid (ikke tom streng)
+                 if (!option) return '';
+                 const capitalized = option.charAt(0).toUpperCase() + option.slice(1);
+                 // Tilføj ikon for accords
+                 const iconSpan = (name === 'accord') ?
+                    `<span class="inline-block w-5 mr-1">${SCENT_ICON_MAP[option] ? SCENT_ICON_MAP[option].icon : ''}</span>`
+                    : '';
+                 return `
+                     <label>
+                         <input type="checkbox" name="${name}" value="${option}">
+                         ${iconSpan} ${capitalized}
+                     </label>
+                 `;
+             }).join('');
+        }
+        document.getElementById(loaderId)?.remove(); // Sikker fjernelse
+    };
+
+    // 1. Gender (Stadig hardkodet)
+    const genders = [
+        { label: 'Masculine', value: 'masculine' },
+        { label: 'Feminine', value: 'feminine' },
+        { label: 'Unisex', value: 'unisex' }
+    ];
+    genderContainer.innerHTML = genders.map(g => `
+        <label>
+            <input type="checkbox" name="gender" value="${g.value}">
+            ${g.label}
+        </label>
+    `).join('');
+
+    // 2. Brands (Dynamisk)
+    buildCheckboxes(brandContainer, 'brand', allBrands.keys(), 'brand-loader');
+
+    // 3. Seasons (Dynamisk fra p.seasons)
+    const allSeasons = new Set(allPerfumes.flatMap(p => p.seasons));
+    buildCheckboxes(seasonContainer, 'season', allSeasons, 'season-loader');
+
+    // 4. Occasions (Dynamisk fra p.occasions)
+    const allOccasions = new Set(allPerfumes.flatMap(p => p.occasions));
+    buildCheckboxes(occasionContainer, 'occasion', allOccasions, 'occasion-loader');
+
+    // 5. Accords (Dynamisk)
+    const allAccords = new Set(allPerfumes.flatMap(p => p.mainAccords));
+    buildCheckboxes(accordContainer, 'accord', allAccords, 'accord-loader');
+
+
+    // 6. Tilføj Event Listeners til ALLE tjekbokse
+    document.querySelectorAll('#filter-sidebar input[type="checkbox"]').forEach(checkbox => {
+        checkbox.addEventListener('change', handleCheckboxChange); // Brug central handler
+    });
+}
+
+
+/**
+ * Central handler for alle filter-checkbox ændringer.
+ */
+function handleCheckboxChange(e) {
+    let filterType;
+    switch(e.target.name) {
+        case 'gender': filterType = 'gender'; break;
+        case 'brand': filterType = 'brands'; break;
+        case 'season': filterType = 'season'; break;
+        case 'occasion': filterType = 'occasion'; break;
+        case 'accord': filterType = 'accords'; break;
+        default: return; // Ukendt filter
+    }
+
+    const value = e.target.value;
+
+    if (e.target.checked) {
+        if (!state.activeFilters[filterType].includes(value)) {
+            state.activeFilters[filterType].push(value);
+        }
+        // Nulstil selectedBrand hvis et brand-tjekboks vælges
+        if (filterType === 'brands') {
+            state.selectedBrand = null;
+        }
+    } else {
+        const index = state.activeFilters[filterType].indexOf(value);
+        if (index > -1) state.activeFilters[filterType].splice(index, 1);
+    }
     applyFiltersAndRender();
 }
 
+
+// --- TEMA-LOGIK (Uændret) ---
+
 function setTheme(theme) {
-    document.documentElement.setAttribute('data-bs-theme', (theme === 'light' || theme === 'dark') ? theme : 'light');
-    document.documentElement.setAttribute('data-theme', (theme !== 'light' && theme !== 'dark') ? theme : '');
-    localStorage.setItem('shobi-theme', theme);
+    // ... (uændret)
+    const htmlTag = document.getElementById('html-tag');
+    if (theme === 'light') {
+        htmlTag.removeAttribute('data-theme');
+        localStorage.removeItem('shobi-theme');
+    } else {
+        htmlTag.setAttribute('data-theme', theme);
+        localStorage.setItem('shobi-theme', theme);
+    }
 }
 
+function initTheme() {
+    // ... (uændret)
+    const savedTheme = localStorage.getItem('shobi-theme');
+    if (savedTheme) {
+        setTheme(savedTheme);
+    }
+    const themeMenuBtn = document.getElementById('theme-menu-btn');
+    const themeMenuDropdown = document.getElementById('theme-menu-dropdown');
+
+    themeMenuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        themeMenuDropdown.classList.toggle('hidden');
+    });
+    document.querySelectorAll('.theme-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const theme = e.currentTarget.dataset.theme;
+            setTheme(theme);
+            themeMenuDropdown.classList.add('hidden');
+        });
+    });
+    window.addEventListener('click', () => {
+        if (!themeMenuDropdown.classList.contains('hidden')) {
+            themeMenuDropdown.classList.add('hidden');
+        }
+    });
+}
+
+// --- INITIALISERING (RETTET) ---
+
 async function init() {
-    console.log("DEBUG: init() function started.");
+    console.log("DEBUG: init() started.");
     try {
         const response = await fetch('database_complete.json');
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
         const rawData = await response.json();
-        
+        allBrands.clear();
+
+        // Flad databasen UD FRA DEN OPRINDELIGE STRUKTUR
         if (rawData.length > 0 && Array.isArray(rawData[0].perfumes)) {
-            allPerfumes = rawData.flatMap(brandObject => {
-                if (brandObject && Array.isArray(brandObject.perfumes)) {
-                    const brandName = brandObject.brandInfo?.name || "Unknown Brand";
-                    return brandObject.perfumes.map(perfume => ({
-                        ...perfume,
-                        brand: brandName, 
-                        brandDescription: brandObject.brandInfo?.description
-                    }));
-                }
-                return [];
-            });
+             allPerfumes = rawData.flatMap(brandObject => {
+                 if (brandObject && Array.isArray(brandObject.perfumes)) {
+                     const brandName = brandObject.brandInfo?.name || "Unknown Brand";
+                     const brandInfo = brandObject.brandInfo || { name: brandName };
+                     if (!allBrands.has(brandName)) {
+                         allBrands.set(brandName, brandInfo);
+                     }
+                     // RETTET: Bevarer seasons og occasions arrays direkte
+                     return brandObject.perfumes.map(perfume => ({
+                         ...perfume,
+                         brand: brandName,
+                         // Sørg for at disse altid er arrays, selvom de mangler i JSON
+                         seasons: perfume.seasons || [],
+                         occasions: perfume.occasions || []
+                     }));
+                 }
+                 return [];
+             });
         } else {
-            allPerfumes = rawData;
+             // Fallback for allerede flad struktur (just in case)
+             allPerfumes = rawData.map(p => ({
+                 ...p,
+                 brand: p.brand || "Unknown Brand", // Sæt default brand hvis det mangler
+                 seasons: p.seasons || [], // Sørg for array
+                 occasions: p.occasions || [] // Sørg for array
+             }));
+             // Byg allBrands map fra flad struktur
+             allPerfumes.forEach(p => {
+                 if(p.brand && !allBrands.has(p.brand)) {
+                     // Forsøg at finde brandInfo - ellers bare brug navnet
+                     const brandInfoEntry = rawData.find(entry => entry.brandInfo?.name === p.brand);
+                     allBrands.set(p.brand, brandInfoEntry?.brandInfo || { name: p.brand });
+                 }
+             });
         }
 
+
+        // RETTET: Korrekt datarensning
         allPerfumes = allPerfumes.filter(p => p && p.code && p.inspiredBy).map(p => ({
             ...p,
-            mainAccords: Array.isArray(p.mainAccords) ? p.mainAccords : [],
-            seasons: Array.isArray(p.seasons) ? p.seasons : [],
-            occasions: Array.isArray(p.occasions) ? p.occasions : [],
+            // brand er allerede sat ovenfor
+            genderAffinity: String(p.genderAffinity || '').toLowerCase(), // Konverter til lowercase string
+            mainAccords: (p.mainAccords || []).map(a => a.toLowerCase()),
+            // RETTET: Gør seasons/occasions til lowercase strings INDE i arrayet
+            seasons: (p.seasons || []).map(s => String(s).toLowerCase()).filter(s => s), // Fjern tomme strenge
+            occasions: (p.occasions || []).map(o => String(o).toLowerCase()).filter(o => o), // Fjern tomme strenge
             notes: p.notes || { top: [], heart: [], base: [] }
+            // Fjerner den forkerte bestSuitedFor logik
         }));
-        
-        console.log(`DEBUG: Final valid perfume count: ${allPerfumes.length}`);
-        
+
+        console.log(`DEBUG: Total valid perfumes loaded: ${allPerfumes.length}`);
+        // console.log("DEBUG: Sample cleaned perfume:", allPerfumes.find(p => p.seasons.length > 0 && p.occasions.length > 0));
+
+
     } catch (error) {
         console.error("ERROR: Could not load or parse perfume data:", error);
-        document.getElementById('results-count').innerHTML = `<span class="text-danger">Error: Could not load data. See console (F12) for details.</span>`;
+        document.getElementById('results-count').textContent = `Error: Could not load data.`;
         return;
     }
 
-    perfumeDetailsModal = new bootstrap.Modal(document.getElementById('perfume-details-modal'));
-    const savedFavorites = localStorage.getItem('shobi-favorites');
-    if(savedFavorites) state.favorites = JSON.parse(savedFavorites);
-    document.getElementById('favorites-count').textContent = state.favorites.length;
-    
-    createFilters(allPerfumes);
-    calculateAndShowStats(allPerfumes);
-    setTheme(localStorage.getItem('shobi-theme') || 'light');
-    applyFiltersAndRender();
+    loadFavorites();
+    populateFilters(); // Skal nu virke korrekt
+    applyFiltersAndRender(); // Startvisning
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    init();
+// --- EVENT LISTENERS (DOMContentLoade) (Uændret) ---
 
-    document.getElementById('search-input').addEventListener('input', e => { 
-        state.searchQuery = e.target.value; 
-        state.showingFavorites = false; 
-        applyFiltersAndRender(); 
+document.addEventListener('DOMContentLoaded', () => {
+    init(); // Kører hoved-logik
+    initTheme(); // Kører tema-logik
+
+    // Mobil filter toggle
+    document.getElementById('filters-toggle-btn').addEventListener('click', toggleMobileFilters);
+
+    // Nulstil filter knapper (mobil + desktop)
+    document.getElementById('reset-all-filters-btn-desktop').addEventListener('click', resetAllFilters);
+    document.getElementById('reset-all-filters-btn-mobile').addEventListener('click', resetAllFilters);
+
+    // Søgefelt-listener
+    document.getElementById('search-input').addEventListener('input', e => {
+        state.searchQuery = e.target.value;
+        applyFiltersAndRender();
     });
-    document.getElementById('sort-btn-group').addEventListener('click', e => {
-        if (e.target.matches('.btn')) {
-            document.querySelector('#sort-btn-group .btn.active').classList.remove('active');
-            e.target.classList.add('active');
-            state.sortKey = e.target.id === 'sort-by-name' ? 'inspiredBy' : 'brand';
-            applyFiltersAndRender();
-        }
-    });
-    document.getElementById('view-btn-group').addEventListener('click', e => {
-        const button = e.target.closest('button');
-        if (button) {
-            document.querySelector('#view-btn-group .btn.active').classList.remove('active');
-            button.classList.add('active');
-            state.viewMode = button.id === 'view-grid' ? 'grid' : 'list';
-            applyFiltersAndRender();
-        }
-    });
-    document.querySelectorAll('.theme-choice').forEach(item => item.addEventListener('click', e => { e.preventDefault(); setTheme(e.target.dataset.themeValue); }));
+
+    // Favoritknap-listener
     document.getElementById('favorites-btn').addEventListener('click', () => {
         state.showingFavorites = !state.showingFavorites;
-        state.currentView = 'main'; // Go back to main view for favorites
-        state.currentBrand = null;
-        document.getElementById('brand-view').classList.add('d-none');
-        document.getElementById('main-view').classList.remove('d-none');
-        if(state.showingFavorites) { 
-            resetAllFilters(); 
-            state.showingFavorites = true; 
-            createFilters(allPerfumes.filter(p => state.favorites.includes(p.code)));
-            calculateAndShowStats(allPerfumes.filter(p => state.favorites.includes(p.code)));
+        state.selectedBrand = null;
+
+        const btn = document.getElementById('favorites-btn');
+        if (state.showingFavorites) {
+            btn.classList.add('bg-red-800');
         } else {
-            createFilters(allPerfumes);
-            calculateAndShowStats(allPerfumes);
+            btn.classList.remove('bg-red-800');
         }
-        document.getElementById('favorites-btn').classList.toggle('active', state.showingFavorites);
         applyFiltersAndRender();
     });
-    document.getElementById('surprise-btn').addEventListener('click', () => {
-        if(allPerfumes.length > 0) {
-            const randomIndex = Math.floor(Math.random() * allPerfumes.length);
-            const randomPerfume = allPerfumes[randomIndex];
-            showPerfumeDetails(randomPerfume.code);
-        }
-    });
-    document.getElementById('reset-filters-btn').addEventListener('click', () => {
-        resetAllFilters();
-        if (state.currentView === 'brand') {
-             const brandPerfumes = allPerfumes.filter(p => p.brand === state.currentBrand);
-             displayPerfumes(brandPerfumes, 'brand-perfume-list');
-        }
-    });
-    document.getElementById('back-to-all-btn').addEventListener('click', () => {
-        state.currentView = 'main';
-        state.currentBrand = null;
-        document.getElementById('brand-view').classList.add('d-none');
-        document.getElementById('main-view').classList.remove('d-none');
-        // Restore global filters and stats
-        createFilters(allPerfumes);
-        calculateAndShowStats(allPerfumes);
+
+    // Clear Brand Filter-knap
+    document.getElementById('clear-brand-filter').addEventListener('click', () => {
+        state.selectedBrand = null;
         applyFiltersAndRender();
     });
+
+    // Modal Lyttere
+    modalCloseBtn.addEventListener('click', hidePerfumeModal);
+    modalOverlay.addEventListener('click', hidePerfumeModal);
+    modalContent.addEventListener('click', (e) => e.stopPropagation());
 });
